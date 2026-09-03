@@ -1,6 +1,9 @@
 #include<stdio.h>
-int main(void)
+
+
+int function(void)
 {
-	printf("testin...\n")
+	printf("aaaaaaaaaaaa\n");
+	printf("aaaaaaaaaaaaaa\n");
 	return 0;
 }
