@@ -11,6 +11,7 @@ final class AppStore: ObservableObject {
     @Published var showChat = false
     @Published var importingModel = false
     private var canWrite = true
+    private var syncingController = false
 
     init() {
         do {
@@ -42,7 +43,12 @@ final class AppStore: ObservableObject {
     @discardableResult
     func save() -> Bool {
         guard canWrite else { return false }
-        do { try LocalFiles.save(archive); storageError = nil; return true }
+        do {
+            try LocalFiles.save(archive)
+            storageError = nil
+            try? ControllerSync.writeSnapshot(archive, error: nil)
+            return true
+        }
         catch { storageError = "保存失败：\(error.localizedDescription)"; return false }
     }
 
@@ -86,11 +92,105 @@ final class AppStore: ObservableObject {
     }
 
     func activate() {
+        importControllerConfig()
         deliverDueMessages()
+        try? ControllerSync.writeSnapshot(archive, error: storageError)
         Task {
             try? await UNUserNotificationCenter.current().setBadgeCount(0)
+            await syncController()
             await syncNotifications()
         }
+    }
+
+    func pairController(_ url: URL) {
+        guard let pairing = LocalController.parse(url) else { return }
+        Task {
+            do {
+                // 先验证访问令牌，再替换原配对，避免错误链接破坏现有连接。
+                _ = try await pairing.request("/health")
+                try pairing.save()
+                await syncController()
+            } catch { status = "电脑配对失败：\(error.localizedDescription)" }
+        }
+    }
+
+    func syncController() async {
+        guard canWrite, !syncingController else { return }
+        syncingController = true
+        defer { syncingController = false }
+        do {
+            guard let controller = try LocalController.load() else { return }
+            _ = try await controller.request("/state", body: JSONEncoder().encode(archive))
+            let data = try await controller.request("/config")
+            let config = try JSONDecoder().decode(ControllerConfig.self, from: data)
+            if config.revision != archive.controllerRevision {
+                let previous = archive
+                let obsolete = archive.scheduledMessages.map { $0.id.uuidString }
+                archive = try config.applying(to: archive)
+                if !archive.settings.notifications { archive.scheduledMessages = [] }
+                guard save() else { archive = previous; return }
+                if !archive.settings.notifications {
+                    UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: obsolete)
+                }
+            }
+            _ = try await controller.request("/state", body: JSONEncoder().encode(archive))
+        } catch {
+            // 电脑不在线不打断聊天，诊断仅写电脑同步快照。
+            status = "局域网控制端未同步：\(error.localizedDescription)"
+            try? ControllerSync.writeSnapshot(archive, error: status)
+        }
+    }
+
+    private func importControllerConfig() {
+        guard canWrite else { return }
+        do {
+            guard let config = try ControllerSync.readConfig(), config.revision != archive.controllerRevision else { return }
+            let previous = archive
+            let obsolete = archive.scheduledMessages.map { $0.id.uuidString }
+            archive = try config.applying(to: archive)
+            if !archive.settings.notifications { archive.scheduledMessages = [] }
+            guard save() else { archive = previous; return }
+            if !archive.settings.notifications {
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: obsolete)
+            }
+        } catch {
+            storageError = error.localizedDescription
+            try? ControllerSync.writeSnapshot(archive, error: storageError)
+        }
+    }
+
+    func sendVoiceFile(_ source: URL, seconds: Double) throws -> UUID {
+        guard canWrite else { throw ControllerConfig.SyncError.invalid }
+        let filename = UUID().uuidString + ".m4a"
+        let destination = try VoiceFiles.url(for: filename)
+        try FileManager.default.copyItem(at: source, to: destination)
+        let previous = archive
+        let obsolete = archive.scheduledMessages.map { $0.id.uuidString }
+        archive.scheduledMessages = []
+        let message = ChatMessage(role: "me", content: "", kind: "voice", audioFilename: filename,
+                                  audioDuration: seconds, transcriptionState: "pending")
+        archive.messages.append(message)
+        guard save() else {
+            archive = previous
+            try? FileManager.default.removeItem(at: destination)
+            throw ControllerConfig.SyncError.invalid
+        }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: obsolete)
+        return message.id
+    }
+
+    func updateTranscript(id: UUID, text: String?, failure: String? = nil) {
+        guard let index = archive.messages.firstIndex(where: { $0.id == id }), canWrite else { return }
+        archive.messages[index].content = text ?? ""
+        archive.messages[index].transcriptionState = text == nil ? "failed" : "done"
+        if let failure { status = failure }
+        save()
+    }
+
+    func updateOwner(_ profile: UserProfile) {
+        let previous = archive.owner
+        archive.owner = profile
+        if !save() { archive.owner = previous }
     }
 
     func pauseNotifications() {

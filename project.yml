@@ -30,10 +30,21 @@ targets:
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: 在设备支持时仅使用本机语音识别理解消息
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_UIRequiresFullScreen: YES
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: 仅在同一局域网内与自己的电脑同步人物资料和记忆
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         CODE_SIGN_STYLE: Automatic
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLSchemes: [xiaopihai]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
     dependencies:
       - sdk: AVFoundation.framework
       - sdk: Speech.framework

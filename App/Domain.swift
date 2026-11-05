@@ -16,6 +16,17 @@ struct ChatMessage: Codable, Identifiable {
     var content: String
     var kind: String = "text"
     var createdAt: Date = Date()
+    var audioFilename: String?
+    var audioDuration: Double?
+    var transcriptionState: String?
+}
+
+struct UserProfile: Codable {
+    var name: String
+    var account: String = ""
+    var region: String = ""
+    var signature: String = ""
+    var avatar: Data?
 }
 
 struct CharacterSettings: Codable {
@@ -41,23 +52,26 @@ struct ModelRecord: Codable {
 }
 
 struct LocalArchive: Codable {
-    var schemaVersion: Int = 2
+    var schemaVersion: Int = 3
     var memories: [MemoryItem] = []
     var messages: [ChatMessage] = []
     var settings: CharacterSettings = CharacterSettings()
     var scheduledMessages: [ScheduledMessage] = []
     var model: ModelRecord?
+    var owner = UserProfile(name: "用户")
+    var character = UserProfile(name: "小屁孩")
+    var controllerRevision: UUID?
 
     init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, memories, messages, settings, scheduledMessages, model
+        case schemaVersion, memories, messages, settings, scheduledMessages, model, owner, character, controllerRevision
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let version = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
-        guard version <= 2 else {
+        guard version <= 3 else {
             throw DecodingError.dataCorruptedError(forKey: .schemaVersion, in: container, debugDescription: "档案版本高于此应用支持的版本")
         }
         memories = try container.decode([MemoryItem].self, forKey: .memories)
@@ -65,7 +79,10 @@ struct LocalArchive: Codable {
         settings = try container.decode(CharacterSettings.self, forKey: .settings)
         scheduledMessages = try container.decodeIfPresent([ScheduledMessage].self, forKey: .scheduledMessages) ?? []
         model = try container.decodeIfPresent(ModelRecord.self, forKey: .model)
-        schemaVersion = 2
+        owner = try container.decodeIfPresent(UserProfile.self, forKey: .owner) ?? UserProfile(name: "用户")
+        character = try container.decodeIfPresent(UserProfile.self, forKey: .character) ?? UserProfile(name: "小屁孩")
+        controllerRevision = try container.decodeIfPresent(UUID.self, forKey: .controllerRevision)
+        schemaVersion = 3
     }
 }
 

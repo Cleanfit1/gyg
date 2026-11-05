@@ -21,3 +21,6 @@ package/
 *.xcuserstate
 xcuserdata/
 private/
+Desktop/data/
+__pycache__/
+*.pyc

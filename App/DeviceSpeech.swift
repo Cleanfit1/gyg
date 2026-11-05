@@ -15,6 +15,8 @@ final class DeviceSpeech: NSObject, ObservableObject, AVAudioPlayerDelegate {
     private var timer: Timer?
     private var gesture: UUID?
     private var currentURL: URL?
+    private var recognitionCompletion: ((Result<String, Error>) -> Void)?
+    private var recognitionTimeout: Task<Void, Never>?
 
     func begin() async {
         guard gesture == nil else { return }
@@ -62,6 +64,8 @@ final class DeviceSpeech: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func end(cancel: Bool) -> URL? {
         gesture = nil
         preparing = false
+        // 结束时直接取录音器时间，不依赖主RunLoop中的计时器是否及时刷新。
+        if let recorder { elapsed = max(elapsed, recorder.currentTime) }
         recorder?.stop()
         timer?.invalidate()
         timer = nil
@@ -90,18 +94,31 @@ final class DeviceSpeech: NSObject, ObservableObject, AVAudioPlayerDelegate {
         request.shouldReportPartialResults = false
         request.contextualStrings = []
         return try await withCheckedThrowingContinuation { continuation in
-            var finished = false
+            recognitionCompletion = { continuation.resume(with: $0) }
             recognitionTask = recognizer.recognitionTask(with: request) { result, error in
-                guard !finished else { return }
-                if let error {
-                    finished = true
-                    continuation.resume(throwing: error)
-                } else if let result, result.isFinal {
-                    finished = true
-                    continuation.resume(returning: result.bestTranscription.formattedString)
+                Task { @MainActor [weak self] in
+                    if let error { self?.completeRecognition(.failure(error)) }
+                    else if let result, result.isFinal {
+                        self?.completeRecognition(.success(result.bestTranscription.formattedString))
+                    }
                 }
             }
+            recognitionTimeout = Task { [weak self] in
+                do { try await Task.sleep(nanoseconds: 25_000_000_000) }
+                catch { return }
+                self?.completeRecognition(.failure(SpeechError.timeout))
+            }
         }
+    }
+
+    private func completeRecognition(_ result: Result<String, Error>) {
+        guard let completion = recognitionCompletion else { return }
+        recognitionCompletion = nil
+        recognitionTimeout?.cancel()
+        recognitionTimeout = nil
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        completion(result)
     }
 
     func play(url: URL) throws {
@@ -114,12 +131,13 @@ final class DeviceSpeech: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     enum SpeechError: LocalizedError {
-        case permission, unavailable, playback
+        case permission, unavailable, playback, timeout
         var errorDescription: String? {
             switch self {
             case .permission: return "语音识别未获允许"
             case .unavailable: return "此设备当前未提供可用的离线中文识别；不会自动上传录音"
             case .playback: return "无法播放音频"
+            case .timeout: return "语音已发送；本机识别超时，可稍后重试转文字"
             }
         }
     }

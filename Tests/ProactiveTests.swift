@@ -42,7 +42,7 @@ final class ProactiveTests: XCTestCase {
             "settings": ["relationship": "分手后", "proactivity": 0.55, "emotionalVariation": 0.55,
                          "intimacy": 0.35, "notifications": false]]
         let archive = try JSONDecoder().decode(LocalArchive.self, from: JSONSerialization.data(withJSONObject: legacy))
-        XCTAssertEqual(archive.schemaVersion, 2)
+        XCTAssertEqual(archive.schemaVersion, 3)
         XCTAssertTrue(archive.scheduledMessages.isEmpty)
         XCTAssertNil(archive.model)
         let roundtrip = try JSONDecoder().decode(LocalArchive.self, from: JSONEncoder().encode(archive))
@@ -52,5 +52,44 @@ final class ProactiveTests: XCTestCase {
     func testFutureArchiveIsNotSilentlyOverwritten() throws {
         let future = Data("{\"schemaVersion\":99}".utf8)
         XCTAssertThrowsError(try JSONDecoder().decode(LocalArchive.self, from: future))
+    }
+
+    func testVoiceMessageSurvivesWithoutTranscript() throws {
+        let voice = ChatMessage(role: "me", content: "", kind: "voice", audioFilename: "sample.m4a",
+                                audioDuration: 4.5, transcriptionState: "failed")
+        let restored = try JSONDecoder().decode(ChatMessage.self, from: JSONEncoder().encode(voice))
+        XCTAssertEqual(restored.audioFilename, "sample.m4a")
+        XCTAssertEqual(restored.kind, "voice")
+        XCTAssertEqual(restored.transcriptionState, "failed")
+    }
+
+    func testLegacyTextMessageStillLoads() throws {
+        let source: [String: Any] = ["id": UUID().uuidString, "role": "me", "content": "原有文字", "kind": "text", "createdAt": 0]
+        let message = try JSONDecoder().decode(ChatMessage.self, from: JSONSerialization.data(withJSONObject: source))
+        XCTAssertEqual(message.content, "原有文字")
+        XCTAssertNil(message.audioFilename)
+    }
+
+    func testControllerKeepsNewPhoneMemoriesAndChat() throws {
+        var archive = LocalArchive()
+        let newer = MemoryItem(category: "事实", content: "手机新记忆", updatedAt: Date(timeIntervalSince1970: 200))
+        archive.memories = [newer]
+        archive.messages = [ChatMessage(role: "me", content: "原有对话")]
+        var older = newer
+        older.content = "电脑旧记忆"
+        older.updatedAt = Date(timeIntervalSince1970: 100)
+        let config = ControllerConfig(memories: [older], deletedMemoryIDs: [], owner: archive.owner,
+                                      character: archive.character, settings: archive.settings)
+        let result = try config.applying(to: archive)
+        XCTAssertEqual(result.memories.first?.content, "手机新记忆")
+        XCTAssertEqual(result.messages.first?.content, "原有对话")
+    }
+
+    func testControllerRejectsInvalidAndPublicPairingLinks() {
+        let token = String(repeating: "a", count: 64)
+        XCTAssertNotNil(LocalController.parse(URL(string: "xiaopihai://pair?host=192.168.1.20&port=8765&token=\(token)")!))
+        XCTAssertNil(LocalController.parse(URL(string: "xiaopihai://pair?host=8.8.8.8&port=8765&token=\(token)")!))
+        XCTAssertNil(LocalController.parse(URL(string: "xiaopihai://pair?host=127.0.0.1&port=8765&token=\(token)")!))
+        XCTAssertNil(LocalController.parse(URL(string: "xiaopihai://pair?host=192.168.1.20&port=8765&token=short")!))
     }
 }
