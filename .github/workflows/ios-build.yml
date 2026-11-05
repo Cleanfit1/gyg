@@ -1,0 +1,55 @@
+name: Build unsigned iPhone app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ios/native-app]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-ios-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show build environment
+        run: xcodebuild -version
+      - name: Install project generator
+        run: brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Run iOS unit tests
+        run: |
+          set -euo pipefail
+          SIMULATOR_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for group in d["devices"].values() for x in group if x["name"].startswith("iPhone")))')
+          xcodebuild -project Xiaopihai.xcodeproj -scheme Xiaopihai \
+            -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -derivedDataPath build-tests CODE_SIGNING_ALLOWED=NO test
+      - name: Build for physical iPhone without signing
+        run: |
+          set -euo pipefail
+          xcodebuild -project Xiaopihai.xcodeproj -scheme Xiaopihai \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' build
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          mkdir -p package/Payload
+          cp -R build/Build/Products/Release-iphoneos/Xiaopihai.app package/Payload/
+          test -f package/Payload/Xiaopihai.app/Info.plist
+          cd package
+          /usr/bin/zip -qry ../Xiaopihai-unsigned.ipa Payload
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xiaopihai-unsigned
+          path: Xiaopihai-unsigned.ipa
+          retention-days: 7
+          if-no-files-found: error
