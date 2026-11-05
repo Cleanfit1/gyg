@@ -73,6 +73,7 @@ struct AvatarView: View {
 struct ChatView: View {
     @EnvironmentObject var store: AppStore
     @StateObject private var speech = DeviceSpeech()
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var text = ""
     @State private var voiceMode = false
@@ -80,34 +81,78 @@ struct ChatView: View {
     @State private var cancelled = false
     @State private var recognizing = false
     @State private var error: String?
+    @State private var showEmoji = false
+    @State private var wallpaper: UIImage?
+
+    private let green = Color(red: 0.08, green: 0.73, blue: 0.34)
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left").font(.system(size: 24, weight: .regular))
+                        .frame(width: 44, height: 44)
+                }.accessibilityLabel("返回")
+                Spacer()
+                Text(store.archive.character.name).font(.system(size: 18, weight: .medium))
+                Spacer()
+                NavigationLink { ChatDetailsView() } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 24, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                }.accessibilityLabel("聊天信息")
+            }.foregroundStyle(Color(white: 0.88)).padding(.horizontal, 6)
+                .padding(.bottom, 5).background(Color(white: 0.10))
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 16) {
-                        ForEach(store.archive.messages) { message in
-                            HStack(alignment: .top, spacing: 8) {
-                                if message.role == "me" { Spacer(minLength: 45) }
+                    LazyVStack(spacing: 18) {
+                        ForEach(Array(store.archive.messages.enumerated()), id: \.element.id) { index, message in
+                            if index == 0 || message.createdAt.timeIntervalSince(store.archive.messages[index - 1].createdAt) > 300 {
+                                Text(message.createdAt.formatted(.dateTime.month().day().hour().minute()))
+                                    .font(.system(size: 12)).foregroundStyle(Color(white: 0.73))
+                                    .padding(.horizontal, 6).padding(.vertical, 3)
+                                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 4))
+                                    .padding(.vertical, 6)
+                            }
+                            HStack(alignment: .top, spacing: 10) {
+                                if message.role == "me" { Spacer(minLength: 38) }
                                 if message.role == "her" {
-                                    NavigationLink { ProfileView(isOwner: false) } label: { AvatarView(profile: store.archive.character) }
+                                    NavigationLink { ProfileView(isOwner: false) } label: { AvatarView(profile: store.archive.character, size: 40) }
                                 }
                                 Group {
                                     if message.kind == "voice" {
                                         VoiceBubble(message: message, speech: speech)
                                     } else {
-                                        Text(message.content).textSelection(.enabled).padding(12)
+                                        Text(message.content).font(.system(size: 17)).lineSpacing(3)
+                                            .textSelection(.enabled).padding(.horizontal, 12).padding(.vertical, 10)
                                     }
                                 }
-                                .background(message.role == "me" ? Color(red: 0.58, green: 0.92, blue: 0.42) : Color(uiColor: .secondarySystemGroupedBackground))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                                if message.role == "me" { AvatarView(profile: store.archive.owner) }
-                                if message.role == "her" { Spacer(minLength: 45) }
+                                .foregroundStyle(message.role == "me" ? Color.black : Color(white: 0.90))
+                                .background(message.role == "me" ? green : Color(white: 0.17), in: RoundedRectangle(cornerRadius: 5))
+                                .overlay(alignment: message.role == "me" ? .topTrailing : .topLeading) {
+                                    BubbleTail(pointsRight: message.role == "me")
+                                        .fill(message.role == "me" ? green : Color(white: 0.17))
+                                        .frame(width: 6, height: 12)
+                                        .offset(x: message.role == "me" ? 5 : -5, y: 14)
+                                }
+                                if message.role == "me" { AvatarView(profile: store.archive.owner, size: 40) }
+                                if message.role == "her" { Spacer(minLength: 38) }
                             }.id(message.id)
                         }
-                    }.padding()
+                    }.padding(.horizontal, 12).padding(.vertical, 16)
+                }.scrollDismissesKeyboard(.interactively)
+                .onAppear {
+                    if let id = store.archive.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
                 }.onChange(of: store.archive.messages.count) { _, _ in
                     if let id = store.archive.messages.last?.id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
+                }
+            }
+            .background {
+                GeometryReader { geometry in
+                    if let wallpaper {
+                        Image(uiImage: wallpaper).resizable().scaledToFill()
+                            .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                            .overlay(Color.black.opacity(0.45))
+                    } else { Color(white: 0.08) }
                 }
             }
             if let issue = error ?? speech.error ?? store.storageError {
@@ -118,13 +163,16 @@ struct ChatView: View {
                     .font(.subheadline).padding()
                 ProgressView(value: Double(speech.level)).padding(.horizontal)
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                Button { voiceMode.toggle() } label: { Image(systemName: voiceMode ? "keyboard" : "mic").font(.title2) }
+            HStack(alignment: .bottom, spacing: 10) {
+                Button { voiceMode.toggle(); showEmoji = false } label: {
+                    Image(systemName: voiceMode ? "keyboard" : "waveform.circle")
+                        .font(.system(size: 28, weight: .light)).frame(width: 30, height: 42)
+                }.accessibilityLabel(voiceMode ? "切换键盘" : "切换语音")
                     .disabled(held || recognizing)
                 if voiceMode {
                     Text(speech.preparing ? "等待麦克风…" : held ? "松开发送" : "按住说话")
                         .frame(maxWidth: .infinity).padding(12)
-                        .background(Color(uiColor: .secondarySystemGroupedBackground))
+                        .background(Color(white: 0.17))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                         .contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance: 0).onChanged { value in
@@ -141,17 +189,41 @@ struct ChatView: View {
                         }.onEnded { _ in finishRecording() })
                 } else {
                     TextField("消息", text: $text, axis: .vertical).lineLimit(1...5)
-                        .padding(10).background(Color(uiColor: .secondarySystemGroupedBackground))
+                        .font(.system(size: 17)).padding(10).background(Color(white: 0.17))
                         .clipShape(RoundedRectangle(cornerRadius: 5))
-                    Button("发送") { store.send(text); text = "" }
-                        .buttonStyle(.borderedProminent).disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-            }.padding(10).background(Color(uiColor: .secondarySystemGroupedBackground))
+                Button { showEmoji.toggle(); voiceMode = false } label: {
+                    Image(systemName: showEmoji ? "keyboard" : "face.smiling")
+                        .font(.system(size: 28, weight: .light)).frame(width: 30, height: 42)
+                }.accessibilityLabel("表情")
+                if !voiceMode && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button("发送") { store.send(text); text = "" }
+                        .font(.system(size: 14, weight: .medium)).foregroundStyle(.white)
+                        .padding(.horizontal, 10).frame(height: 36).background(green, in: RoundedRectangle(cornerRadius: 5))
+                } else {
+                    Menu {
+                        NavigationLink("聊天背景") { ChatWallpaperView() }
+                        NavigationLink("对方资料") { ProfileView(isOwner: false) }
+                        NavigationLink("查找聊天内容") { ChatSearchView() }
+                    } label: {
+                        Image(systemName: "plus.circle").font(.system(size: 28, weight: .light))
+                            .frame(width: 30, height: 42)
+                    }.accessibilityLabel("更多功能")
+                }
+            }.foregroundStyle(Color(white: 0.80)).padding(.horizontal, 10).padding(.vertical, 8)
+                .background(Color(white: 0.12))
+            if showEmoji {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 7), spacing: 18) {
+                    ForEach(["😀", "😂", "🥹", "🥰", "😘", "😏", "😭", "🥺", "😤", "🙄", "😴", "🤔", "🤭", "😳", "❤️", "💔", "👍", "🫂", "🐶", "🌹", "✨"], id: \.self) { emoji in
+                        Button { text += emoji } label: { Text(emoji).font(.system(size: 28)).frame(height: 34) }
+                    }
+                }.padding(16).background(Color(white: 0.15))
+            }
         }
-        .background(Color(uiColor: .systemGroupedBackground))
-        .navigationTitle(store.archive.character.name).navigationBarTitleDisplayMode(.inline)
+        .background(Color(white: 0.10)).preferredColorScheme(.dark)
+        .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        .toolbar { NavigationLink { ChatDetailsView() } label: { Image(systemName: "ellipsis") } }
+        .onAppear { wallpaper = ChatWallpaper.load() }
         .onDisappear { _ = speech.end(cancel: true); held = false }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { _ = speech.end(cancel: true); held = false }
@@ -177,6 +249,64 @@ struct ChatView: View {
                 }
                 store.updateTranscript(id: id, text: transcript)
             } catch { store.updateTranscript(id: id, text: nil, failure: error.localizedDescription) }
+        }
+    }
+}
+
+struct BubbleTail: Shape {
+    var pointsRight: Bool
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: pointsRight ? 0 : rect.width, y: 0))
+            path.addLine(to: CGPoint(x: pointsRight ? rect.width : 0, y: rect.midY))
+            path.addLine(to: CGPoint(x: pointsRight ? 0 : rect.width, y: rect.height))
+            path.closeSubpath()
+        }
+    }
+}
+
+enum ChatWallpaper {
+    static func url() throws -> URL {
+        try LocalFiles.archiveURL().deletingLastPathComponent().appendingPathComponent("chat-wallpaper.jpg")
+    }
+    static func load() -> UIImage? {
+        guard let url = try? url() else { return nil }
+        return UIImage(contentsOfFile: url.path)
+    }
+}
+
+struct ChatWallpaperView: View {
+    @State private var photo: PhotosPickerItem?
+    @State private var image = ChatWallpaper.load()
+    @State private var issue: String?
+    var body: some View {
+        List {
+            Section {
+                PhotosPicker("从相册选择聊天背景", selection: $photo, matching: .images)
+                if let image { Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 350) }
+                Button("使用纯色背景") {
+                    do {
+                        let url = try ChatWallpaper.url()
+                        if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+                        image = nil
+                    } catch { issue = "背景保存失败，请重试" }
+                }
+            } footer: { Text("背景仅保存在这台手机，不会上传电脑或公共仓库。") }
+            if let issue { Text(issue).foregroundStyle(.red) }
+        }.navigationTitle("聊天背景").navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .onChange(of: photo) { _, item in
+            Task {
+                do {
+                    guard let data = try await item?.loadTransferable(type: Data.self), let original = UIImage(data: data) else { return }
+                    let scale = min(1, 1600 / max(original.size.width, original.size.height))
+                    let size = CGSize(width: original.size.width * scale, height: original.size.height * scale)
+                    let resized = UIGraphicsImageRenderer(size: size).image { _ in original.draw(in: CGRect(origin: .zero, size: size)) }
+                    guard let jpeg = resized.jpegData(compressionQuality: 0.8) else { return }
+                    try jpeg.write(to: ChatWallpaper.url(), options: [.atomic, .completeFileProtectionUnlessOpen])
+                    image = resized
+                } catch { issue = "背景读取失败，请重试" }
+            }
         }
     }
 }
@@ -310,6 +440,7 @@ struct ChatDetailsView: View {
                     .padding()
             }
             NavigationLink("查找聊天内容") { ChatSearchView() }
+            NavigationLink("设置聊天背景") { ChatWallpaperView() }
         }.navigationTitle("聊天信息").navigationBarTitleDisplayMode(.inline)
     }
 }

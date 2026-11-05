@@ -10,6 +10,7 @@ import json
 import os
 import secrets
 import socket
+import subprocess
 import threading
 import time
 try:
@@ -196,12 +197,37 @@ def handler(repository):
 
 
 def local_addresses():
+    """优先选择有网关的活动网卡，并实际验证地址仍属于本机。"""
     addresses = []
-    for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-        value = item[4][0]
-        address = ipaddress.ip_address(value)
-        if address.is_private and not address.is_loopback and not address.is_link_local and value not in addresses:
+    candidates = []
+    if os.name == 'nt':
+        script = ("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+                  "@(Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } | "
+                  "Sort-Object @{Expression={if($_.InterfaceAlias -match 'WLAN|Wi-Fi|无线'){0}else{1}}} | "
+                  "ForEach-Object { $_.IPv4Address.IPAddress }) | ConvertTo-Json -Compress")
+        try:
+            result = subprocess.run(['powershell.exe', '-NoProfile', '-Command', script],
+                                    capture_output=True, encoding='utf-8-sig', timeout=8,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
+            values = json.loads(result.stdout)
+            candidates.extend([values] if isinstance(values, str) else (values or []))
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+    try:
+        candidates.extend(item[4][0] for item in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET))
+    except OSError:
+        pass
+    for value in candidates:
+        try:
+            address = ipaddress.ip_address(value)
+            private = address.version == 4 and (value.startswith('10.') or value.startswith('192.168.') or
+                      (value.startswith('172.') and 16 <= int(value.split('.')[1]) <= 31))
+            if not private or value in addresses: continue
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind((value, 0))
             addresses.append(value)
+        except (OSError, ValueError):
+            continue
     return addresses
 
 
@@ -218,6 +244,7 @@ class Window:
         memories, profiles, sync = (ttk.Frame(tabs) for _ in range(3))
         for frame, title in [(memories, '记忆管理'), (profiles, '人物与情绪'), (sync, '手机连接')]:
             tabs.add(frame, text=title)
+        ttk.Label(memories, text='这里同时保存你和对方的记忆；“用户本人”是你，“模拟人物”是她。请在内容中明确所属人物。').pack(padx=8, pady=5)
         self.tree = ttk.Treeview(memories, columns=('category', 'importance', 'content'), show='headings', height=14)
         for name, text, width in [('category', '分类', 80), ('importance', '重要程度', 80), ('content', '内容', 650)]:
             self.tree.heading(name, text=text); self.tree.column(name, width=width)
@@ -254,9 +281,12 @@ class Window:
         ttk.Button(profiles, text='保存人物配置', command=self.save_profiles).pack(pady=8)
         ttk.Button(profiles, text='读取手机当前资料', command=self.load_phone_profiles).pack(pady=4)
         ttk.Label(sync, text='手机和电脑接入同一可信Wi-Fi；只在此窗口运行期间提供同步。', wraplength=850).pack(pady=12)
-        self.host = tk.StringVar(value=next(iter(local_addresses()), '192.168.1.2'))
+        addresses = local_addresses()
+        self.host = tk.StringVar(value=next(iter(addresses), ''))
         ttk.Label(sync, text='本机局域网IPv4（多网卡时确认Wi-Fi地址）').pack()
-        ttk.Entry(sync, textvariable=self.host, width=35).pack(pady=6)
+        self.addresses = ttk.Combobox(sync, textvariable=self.host, values=addresses, width=35)
+        self.addresses.pack(pady=6)
+        ttk.Button(sync, text='重新检测当前网络地址', command=self.refresh_addresses).pack(pady=4)
         ttk.Button(sync, text='开启局域网控制端', command=self.start).pack(pady=8)
         self.pair = tk.Text(sync, height=4, wrap='word'); self.pair.pack(fill='x', padx=16, pady=8)
         ttk.Button(sync, text='复制配对链接', command=self.copy_link).pack(pady=4)
@@ -345,6 +375,12 @@ class Window:
             for name, variable in self.fields[key].items(): variable.set(phone[key].get(name, ''))
         self.status.set('已读取手机当前资料，确认后点击保存人物配置。')
 
+    def refresh_addresses(self):
+        addresses = local_addresses()
+        self.addresses['values'] = addresses
+        self.host.set(next(iter(addresses), ''))
+        self.status.set('已刷新当前可用地址；请确认选中的是与手机同网的网卡。' if addresses else '未检测到可用局域网地址，请连接Wi-Fi后重试。')
+
     def start(self):
         try:
             address = ipaddress.ip_address(self.host.get().strip())
@@ -358,7 +394,13 @@ class Window:
             link = f'http://{host}:8765/pair?token={self.repository.token}'
             self.pair.delete('1.0', 'end'); self.pair.insert('1.0', link)
             self.status.set('局域网服务已开启，若Windows提示防火墙权限，只允许私人网络。')
-        except Exception as error: messagebox.showerror('无法启动局域网同步', str(error))
+        except Exception as error:
+            if getattr(error, 'winerror', None) == 10049:
+                self.refresh_addresses()
+                messagebox.showerror('网络地址已变化', '原地址已不属于当前电脑，已重新检测。请确认新地址后再次开启控制端。')
+            elif getattr(error, 'winerror', None) == 10048:
+                messagebox.showerror('端口已被占用', '请关闭其他已开启的电脑控制端窗口，再重试。')
+            else: messagebox.showerror('无法启动局域网同步', str(error))
 
     def copy_link(self):
         value = self.pair.get('1.0', 'end').strip()
