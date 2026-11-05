@@ -61,6 +61,11 @@ targets:
     platform: iOS
     sources:
       - path: Tests
+        excludes: [Fixtures]
+      - path: Tests/Fixtures
+        type: folder
+        buildPhase: resources
+        optional: true
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES

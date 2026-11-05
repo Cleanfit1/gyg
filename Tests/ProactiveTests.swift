@@ -2,6 +2,17 @@ import XCTest
 @testable import Xiaopihai
 
 final class ProactiveTests: XCTestCase {
+    func testRealQwenModelProducesOfflineReply() async throws {
+        guard let model = Bundle(for: ProactiveTests.self).url(forResource: "qwen", withExtension: "gguf", subdirectory: "Fixtures") else {
+            XCTFail("缺少真实模型测试资源，不能将本次构建判为已验证推理")
+            return
+        }
+        let prompt = "<|im_start|>system\n用中文简短回答。<|im_end|>\n<|im_start|>user\n你好，请打个招呼。<|im_end|>\n<|im_start|>assistant\n"
+        let reply = try await LlamaContext.shared.generate(path: model.path, prompt: prompt, maxTokens: 24)
+        XCTAssertFalse(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertFalse(reply.contains("<|im_start|>"))
+    }
+
     func testPromptSeparatesRolesAndEscapesControlTokens() {
         var archive = LocalArchive()
         archive.owner.name = "用户甲"

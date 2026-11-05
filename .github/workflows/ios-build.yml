@@ -39,6 +39,12 @@ jobs:
           bash build-xcframework.sh ios-sim ios-device
           mkdir -p ../Vendor
           cp -R build-apple/llama.xcframework ../Vendor/
+      - name: Prepare real offline model test
+        run: |
+          set -euo pipefail
+          mkdir -p Tests/Fixtures
+          curl --fail --location --retry 3 --output Tests/Fixtures/qwen.gguf 'https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/7dabda4d13d513e3e842b20f0d435c732f172cbe/qwen2.5-3b-instruct-q4_k_m.gguf'
+          echo '626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d  Tests/Fixtures/qwen.gguf' | shasum -a 256 -c -
       - name: Generate project
         run: xcodegen generate
       - name: Test desktop controller
