@@ -12,9 +12,13 @@ import secrets
 import socket
 import threading
 import time
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+try:
+    import tkinter as tk
+    from tkinter import ttk, filedialog, messagebox
+except ImportError:
+    tk = None  # 云端无图形库时仍能运行网络与数据回归测试。
 import uuid
+from urllib.parse import urlsplit, parse_qs, urlencode
 
 ROOT = Path(__file__).resolve().parent / 'data'
 LOCK = threading.RLock()
@@ -77,7 +81,8 @@ class Repository:
         self.root = root
         root.mkdir(parents=True, exist_ok=True)
         path = root / 'config.json'
-        self.pristine = not path.exists()
+        initialized = root / 'initialized.txt'
+        self.pristine = not initialized.exists()
         self.config = validate(json.loads(path.read_text(encoding='utf-8'))) if path.exists() else default_config()
         token_path = root / 'pair-token.txt'
         self.token = token_path.read_text().strip() if token_path.exists() else secrets.token_hex(32)
@@ -99,6 +104,7 @@ class Repository:
             atomic_json(self.root / 'config.json', value)
             self.config = value
             self.pristine = False
+            (self.root / 'initialized.txt').write_text('configured', encoding='ascii')
 
     def state(self, value):
         if value.get('schemaVersion') != 3 or not isinstance(value.get('messages'), list):
@@ -112,6 +118,7 @@ class Repository:
                 atomic_json(self.root / 'config.json', config)
                 self.config = config
                 self.pristine = False
+                (self.root / 'initialized.txt').write_text('paired', encoding='ascii')
             atomic_json(self.root / 'phone-state.json', value)
             self.last_sync = time.time()
 
@@ -138,6 +145,24 @@ def handler(repository):
             return True
 
         def do_GET(self):
+            parts = urlsplit(self.path)
+            if parts.path == '/pair':
+                query = parse_qs(parts.query)
+                if not hmac.compare_digest(query.get('token', [''])[0], repository.token):
+                    self.reply(401, {'error': '未配对'}); return
+                host = self.server.server_address[0]
+                link = 'xiaopihai://pair?' + urlencode(dict(host=host, port=self.server.server_address[1], token=repository.token))
+                body = ('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
+                        '<title>连接电脑控制端</title><main style="font:20px sans-serif;padding:32px">'
+                        '<h2>连接自己的电脑</h2><p>请确认手机与电脑处于同一可信Wi-Fi。</p>'
+                        '<a href="' + html.escape(link, quote=True) + '">打开小屁孩并配对</a>'
+                        '<p>首次使用请允许App访问本地网络。</p></main>').encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Referrer-Policy', 'no-referrer')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers(); self.wfile.write(body); return
             if not self.authenticated():
                 return
             if self.path == '/health':
@@ -227,6 +252,7 @@ class Window:
         self.notifications = tk.BooleanVar(value=self.config['settings']['notifications'])
         ttk.Checkbutton(profiles, text='允许预生成主动消息通知（尚未接入生成模型）', variable=self.notifications).pack(pady=5)
         ttk.Button(profiles, text='保存人物配置', command=self.save_profiles).pack(pady=8)
+        ttk.Button(profiles, text='读取手机当前资料', command=self.load_phone_profiles).pack(pady=4)
         ttk.Label(sync, text='手机和电脑接入同一可信Wi-Fi；只在此窗口运行期间提供同步。', wraplength=850).pack(pady=12)
         self.host = tk.StringVar(value=next(iter(local_addresses()), '192.168.1.2'))
         ttk.Label(sync, text='本机局域网IPv4（多网卡时确认Wi-Fi地址）').pack()
@@ -310,6 +336,15 @@ class Window:
         self.config['memories'] = list(by_id.values())
         self.persist()
 
+    def load_phone_profiles(self):
+        path = self.repository.root / 'phone-state.json'
+        if not path.exists(): messagebox.showinfo('未收到手机状态', '先完成手机配对并打开一次App。'); return
+        phone = json.loads(path.read_text(encoding='utf-8'))
+        for key in ['owner', 'character']:
+            self.config[key] = copy.deepcopy(phone[key])
+            for name, variable in self.fields[key].items(): variable.set(phone[key].get(name, ''))
+        self.status.set('已读取手机当前资料，确认后点击保存人物配置。')
+
     def start(self):
         try:
             address = ipaddress.ip_address(self.host.get().strip())
@@ -320,7 +355,7 @@ class Window:
                 self.server.daemon_threads = True
                 threading.Thread(target=self.server.serve_forever, daemon=True).start()
             host = self.server.server_address[0]
-            link = f'xiaopihai://pair?host={host}&port=8765&token={self.repository.token}'
+            link = f'http://{host}:8765/pair?token={self.repository.token}'
             self.pair.delete('1.0', 'end'); self.pair.insert('1.0', link)
             self.status.set('局域网服务已开启，若Windows提示防火墙权限，只允许私人网络。')
         except Exception as error: messagebox.showerror('无法启动局域网同步', str(error))
@@ -340,6 +375,7 @@ class Window:
 
 
 if __name__ == '__main__':
+    if tk is None: raise SystemExit('此电脑Python缺少Tk图形组件，请安装带Tk的Python。')
     app = tk.Tk()
     try:
         Window(app, Repository())
