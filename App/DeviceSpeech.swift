@@ -22,7 +22,7 @@ final class DeviceSpeech: NSObject, ObservableObject, AVAudioPlayerDelegate {
         gesture = token
         preparing = true
         let allowed = await withCheckedContinuation { continuation in
-            AVAudioSession.sharedInstance().requestRecordPermission { continuation.resume(returning: $0) }
+            AVAudioApplication.requestRecordPermission { continuation.resume(returning: $0) }
         }
         // 用户在权限弹窗期间松手时，不能遗留后台录音。
         guard gesture == token else { preparing = false; return }

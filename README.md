@@ -17,7 +17,7 @@
 4. 构建成功后，在该次运行的Artifacts下载`Xiaopihai-unsigned`并解压，获得`Xiaopihai-unsigned.ipa`。
 5. 未签名IPA不能直接点击安装，需要在Windows上由支持免费Apple账号的工具重新签名并安装。
 
-工作流只允许手动触发，使用标准`macos-15` runner，不接受Apple密码、签名证书或GitHub Secret。首次运行仍可能需要在GitHub启用Actions。
+工作流支持手动触发及`ios/native-app`分支推送，使用标准`macos-15` runner，不接受Apple密码、签名证书或GitHub Secret。先执行5项模拟器测试，再编译真机目标并打包。首次运行仍可能需要在GitHub启用Actions。
 
 GitHub官方说明公共仓库的标准托管runner免费；私有仓库额度和计费规则不同，使用前检查自己的账户设置。工作流会通过Homebrew安装XcodeGen及使用GitHub官方checkout/artifact动作，未固定完整依赖供应链，尚未实际执行。
 
@@ -33,7 +33,7 @@ GitHub官方说明公共仓库的标准托管runner免费；私有仓库额度�
 
 ## 验证状态
 
-尚未在GitHub运行构建，未通过Xcode编译、iOS原生测试或真机安装。构建成功只证明源码可编译，不代表本地模型、语音和后台通知都能工作。
+2026-11-05首次GitHub构建成功，5项模拟器测试全部通过，iPhone目标编译成功并生成未签名IPA。尚未在真实iPhone安装测试。构建成功不代表本地模型、语音和后台通知都能工作；模型尚未接入。
 
 ## 官方参考
 

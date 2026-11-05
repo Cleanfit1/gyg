@@ -29,6 +29,7 @@ targets:
         INFOPLIST_KEY_NSMicrophoneUsageDescription: 录制你主动发送的语音消息
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: 在设备支持时仅使用本机语音识别理解消息
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UIRequiresFullScreen: YES
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
