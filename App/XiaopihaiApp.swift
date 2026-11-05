@@ -155,8 +155,14 @@ struct ChatView: View {
                     } else { Color(white: 0.08) }
                 }
             }
-            if let issue = error ?? speech.error ?? store.storageError {
+            if store.generating {
+                Text("对方正在输入…").font(.caption).foregroundStyle(.secondary).padding(8)
+            }
+            if let issue = error ?? speech.error ?? store.storageError ?? store.inferenceError {
                 Text(issue).font(.caption).foregroundStyle(.secondary).padding(8)
+            }
+            if store.inferenceError != nil && store.archive.model != nil {
+                Button("重试回复") { store.requestReply() }.font(.caption)
             }
             if held {
                 Text("\(Int(speech.elapsed)) 秒 · \(cancelled ? "松开取消" : "上滑取消，松开发送")")
@@ -227,6 +233,7 @@ struct ChatView: View {
         .onDisappear { _ = speech.end(cancel: true); held = false }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { _ = speech.end(cancel: true); held = false }
+            if phase == .background { store.cancelReply() }
         }
     }
 
@@ -489,10 +496,18 @@ struct PersonalSettingsView: View {
                 do { exportURL = try store.exportArchive() } catch { issue = "备份失败，请重试" }
             }
             Button("导入离线模型（GGUF）") { showModelImporter = true }
-                .fileImporter(isPresented: $showModelImporter, allowedContentTypes: [.data]) { result in
-                    guard case .success(let url) = result else { return }
-                    Task { await store.importModel(from: url) }
+                .disabled(store.importingModel || store.archive.model != nil)
+                .fileImporter(isPresented: $showModelImporter, allowedContentTypes: [.item]) { result in
+                    switch result {
+                    case .success(let url): Task { await store.importModel(from: url) }
+                    case .failure: issue = "未能读取文件，请重试"
+                    }
                 }
+            if store.importingModel { ProgressView("正在复制并校验模型，请保持此页面打开…") }
+            if let model = store.archive.model {
+                Text("已安装：" + model.displayName).font(.caption).foregroundStyle(.secondary)
+            }
+            Text(store.status).font(.caption).foregroundStyle(.secondary)
             if let url = exportURL { ShareLink("导出备份", item: url) }
             if let issue { Text(issue).foregroundStyle(.red) }
         }.navigationTitle("设置").navigationBarTitleDisplayMode(.inline)

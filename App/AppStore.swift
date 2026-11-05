@@ -5,7 +5,7 @@ import UserNotifications
 @MainActor
 final class AppStore: ObservableObject {
     @Published var archive = LocalArchive()
-    @Published var status = "本地模型尚未接入"
+    @Published var status = "尚未安装离线模型"
     @Published var storageError: String?
     @Published var selectedTab = 0
     @Published var showChat = false
@@ -17,6 +17,7 @@ final class AppStore: ObservableObject {
         do {
             if let saved = try LocalFiles.load() {
                 archive = saved
+                if archive.model != nil { status = "已安装离线模型" }
             } else if let url = Bundle.main.url(forResource: "seed_memories", withExtension: "json") {
                 archive.memories = try JSONDecoder().decode([MemoryItem].self, from: Data(contentsOf: url))
                 save()
@@ -63,19 +64,48 @@ final class AppStore: ObservableObject {
         archive.messages.append(ChatMessage(role: "me", content: value, kind: kind))
         guard save() else { archive = previous; return }
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: obsolete)
-        status = archive.model == nil ? "消息已保存；请先导入本地模型" : "正在本机生成回复…"
-        guard archive.model != nil else { return }
-        Task { [weak self] in
+        requestReply()
+    }
+
+    @Published var generating = false
+    @Published var inferenceError: String?
+    private var replyTask: Task<Void, Never>?
+    private var replyRevision = UUID()
+
+    func cancelReply() {
+        replyRevision = UUID()
+        replyTask?.cancel()
+        replyTask = nil
+        generating = false
+    }
+
+    func requestReply() {
+        cancelReply()
+        guard canWrite else { return }
+        inferenceError = nil
+        guard archive.model != nil else {
+            inferenceError = "请先在设置中完成离线模型安装"
+            return
+        }
+        let revision = replyRevision
+        let snapshot = archive
+        generating = true
+        replyTask = Task { [weak self] in
             guard let self else { return }
+            defer { if self.replyRevision == revision { self.generating = false } }
             do {
-                let reply = try await LocalInference.shared.reply(archive: archive)
+                let reply = try await LocalInference.shared.reply(archive: snapshot)
+                try Task.checkCancellation()
+                guard self.replyRevision == revision else { return }
                 guard !reply.isEmpty else { throw LocalInference.InferenceError.empty }
-                await MainActor.run {
-                    self.archive.messages.append(ChatMessage(role: "her", content: reply))
-                    self.status = "已使用本机模型回复"
-                    _ = self.save()
-                }
-            } catch { self.status = error.localizedDescription }
+                let previous = self.archive
+                self.archive.messages.append(ChatMessage(role: "her", content: reply))
+                if !self.save() { self.archive = previous }
+            } catch is CancellationError {
+                // 新消息或切到后台取消推理，不把旧回复追加到新对话。
+            } catch {
+                if self.replyRevision == revision { self.inferenceError = error.localizedDescription }
+            }
         }
     }
 
@@ -136,6 +166,7 @@ final class AppStore: ObservableObject {
             let data = try await controller.request("/config")
             let config = try JSONDecoder().decode(ControllerConfig.self, from: data)
             if config.revision != archive.controllerRevision {
+                cancelReply()
                 let previous = archive
                 let obsolete = archive.scheduledMessages.map { $0.id.uuidString }
                 archive = try config.applying(to: archive)
@@ -157,6 +188,7 @@ final class AppStore: ObservableObject {
         guard canWrite else { return }
         do {
             guard let config = try ControllerSync.readConfig(), config.revision != archive.controllerRevision else { return }
+            cancelReply()
             let previous = archive
             let obsolete = archive.scheduledMessages.map { $0.id.uuidString }
             archive = try config.applying(to: archive)
@@ -173,6 +205,7 @@ final class AppStore: ObservableObject {
 
     func sendVoiceFile(_ source: URL, seconds: Double) throws -> UUID {
         guard canWrite else { throw ControllerConfig.SyncError.invalid }
+        cancelReply()
         let filename = UUID().uuidString + ".m4a"
         let destination = try VoiceFiles.url(for: filename)
         try FileManager.default.copyItem(at: source, to: destination)
@@ -196,7 +229,7 @@ final class AppStore: ObservableObject {
         archive.messages[index].content = text ?? ""
         archive.messages[index].transcriptionState = text == nil ? "failed" : "done"
         if let failure { status = failure }
-        save()
+        if save(), let text, !text.isEmpty { requestReply() }
     }
 
     func updateOwner(_ profile: UserProfile) {
@@ -263,13 +296,16 @@ final class AppStore: ObservableObject {
     func importModel(from source: URL) async {
         guard canWrite, !importingModel, archive.model == nil else { return }
         importingModel = true
+        status = "正在复制并校验离线模型，请保持应用在前台"
         defer { importingModel = false }
         do {
             let imported = try await Task.detached(priority: .utility) {
                 try ModelStorage.importModel(from: source)
             }.value
+            let previous = archive.model
             archive.model = imported
-            if save() { status = "模型文件已导入；推理引擎尚未接入，格式检查不保证可运行" }
+            if save() { status = "离线模型已安装，可以返回聊天测试回复" }
+            else { archive.model = previous; status = "模型记录保存失败，请检查存储空间" }
         } catch { status = "导入失败：\(error.localizedDescription)" }
     }
 }
