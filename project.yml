@@ -37,15 +37,22 @@ targets:
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: '0.4.0'
+        CURRENT_PROJECT_VERSION: '4'
     info:
       path: App/Info.plist
       properties:
+        CFBundleShortVersionString: '0.4.0'
+        CFBundleVersion: '4'
+        UIFileSharingEnabled: true
         CFBundleURLTypes:
           - CFBundleURLSchemes: [xiaopihai]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           NSAllowsArbitraryLoads: true
     dependencies:
+      - framework: Vendor/llama.xcframework
+        embed: true
       - sdk: AVFoundation.framework
       - sdk: Speech.framework
       - sdk: UserNotifications.framework

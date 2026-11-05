@@ -15,13 +15,30 @@ concurrency:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
       - name: Show build environment
         run: xcodebuild -version
       - name: Install project generator
         run: brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+      - uses: actions/cache@v4
+        id: llama-cache
+        with:
+          path: Vendor/llama.xcframework
+          key: llama-ios-553d2c2e7ec6-metal-v1
+      - name: Build pinned offline inference runtime
+        if: steps.llama-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git init runtime-source
+          git -C runtime-source remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C runtime-source fetch --depth 1 origin 553d2c2e7ec67307b44d6264ded5e3d6fce5b1b9
+          git -C runtime-source checkout --detach FETCH_HEAD
+          cd runtime-source
+          bash build-xcframework.sh ios-sim ios-device
+          mkdir -p ../Vendor
+          cp -R build-apple/llama.xcframework ../Vendor/
       - name: Generate project
         run: xcodegen generate
       - name: Test desktop controller

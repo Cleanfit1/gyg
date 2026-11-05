@@ -480,6 +480,7 @@ struct PersonalSettingsView: View {
     @EnvironmentObject var store: AppStore
     @State private var exportURL: URL?
     @State private var issue: String?
+    @State private var showModelImporter = false
     var body: some View {
         List {
             NavigationLink("个人资料") { ProfileView(isOwner: true) }
@@ -487,6 +488,11 @@ struct PersonalSettingsView: View {
             Button("聊天记录备份") {
                 do { exportURL = try store.exportArchive() } catch { issue = "备份失败，请重试" }
             }
+            Button("导入离线模型（GGUF）") { showModelImporter = true }
+                .fileImporter(isPresented: $showModelImporter, allowedContentTypes: [.data]) { result in
+                    guard case .success(let url) = result else { return }
+                    Task { await store.importModel(from: url) }
+                }
             if let url = exportURL { ShareLink("导出备份", item: url) }
             if let issue { Text(issue).foregroundStyle(.red) }
         }.navigationTitle("设置").navigationBarTitleDisplayMode(.inline)

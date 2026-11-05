@@ -63,8 +63,20 @@ final class AppStore: ObservableObject {
         archive.messages.append(ChatMessage(role: "me", content: value, kind: kind))
         guard save() else { archive = previous; return }
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: obsolete)
-        // 不用固定套话冒充模型；待真机评估后接入本地推理引擎。
-        status = "消息已保存在手机；本地推理引擎尚未接入，暂不能生成回复"
+        status = archive.model == nil ? "消息已保存；请先导入本地模型" : "正在本机生成回复…"
+        guard archive.model != nil else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let reply = try await LocalInference.shared.reply(archive: archive)
+                guard !reply.isEmpty else { throw LocalInference.InferenceError.empty }
+                await MainActor.run {
+                    self.archive.messages.append(ChatMessage(role: "her", content: reply))
+                    self.status = "已使用本机模型回复"
+                    _ = self.save()
+                }
+            } catch { self.status = error.localizedDescription }
+        }
     }
 
     func addMemory(category: String, content: String, importance: Int) {
