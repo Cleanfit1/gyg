@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 55
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
       - name: Show build environment

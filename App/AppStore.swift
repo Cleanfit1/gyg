@@ -67,6 +67,10 @@ final class AppStore: ObservableObject {
         requestReply()
     }
 
+    func setInferenceError(_ message: String) {
+        inferenceError = message
+    }
+
     @Published var generating = false
     @Published var inferenceError: String?
     private var replyTask: Task<Void, Never>?
@@ -104,7 +108,10 @@ final class AppStore: ObservableObject {
             } catch is CancellationError {
                 // 新消息或切到后台取消推理，不把旧回复追加到新对话。
             } catch {
-                if self.replyRevision == revision { self.inferenceError = error.localizedDescription }
+                if self.replyRevision == revision {
+                    self.inferenceError = error.localizedDescription
+                    try? ControllerSync.writeSnapshot(self.archive, error: error.localizedDescription)
+                }
             }
         }
     }
@@ -226,6 +233,7 @@ final class AppStore: ObservableObject {
 
     func updateTranscript(id: UUID, text: String?, failure: String? = nil) {
         guard let index = archive.messages.firstIndex(where: { $0.id == id }), canWrite else { return }
+        cancelReply()
         archive.messages[index].content = text ?? ""
         archive.messages[index].transcriptionState = text == nil ? "failed" : "done"
         if let failure { status = failure }

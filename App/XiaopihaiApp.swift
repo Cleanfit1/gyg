@@ -255,7 +255,10 @@ struct ChatView: View {
                     return
                 }
                 store.updateTranscript(id: id, text: transcript)
-            } catch { store.updateTranscript(id: id, text: nil, failure: error.localizedDescription) }
+            } catch {
+                store.updateTranscript(id: id, text: nil, failure: error.localizedDescription)
+                store.setInferenceError("语音已发送并保留，但离线识别没有得到文字，所以未触发自动回复")
+            }
         }
     }
 }

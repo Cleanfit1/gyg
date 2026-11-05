@@ -46,10 +46,9 @@ enum ModelStorage {
         let input = try FileHandle(forReadingFrom: source)
         let header = try input.read(upToCount: 8) ?? Data()
         try input.close()
-        guard header.count == 8, Array(header.prefix(4)) == [0x47, 0x47, 0x55, 0x46],
-              [UInt8(2), UInt8(3)].contains(header[4]), header[5...7].allSatisfy({ $0 == 0 }) else {
-            throw StorageError.invalidFile
-        }
+        guard header.count == 8, Array(header.prefix(4)) == [0x47, 0x47, 0x55, 0x46] else { throw StorageError.invalidFile }
+        guard (2...3).contains(header[4]) else { throw StorageError.unsupportedVersion }
+        guard header[5...7].allSatisfy({ $0 == 0 }) else { throw StorageError.invalidFile }
         let root = try directory()
         let capacity = try root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         guard let free = capacity.volumeAvailableCapacityForImportantUsage,
@@ -66,6 +65,7 @@ enum ModelStorage {
             while let block = try handle.read(upToCount: 4 * 1024 * 1024), !block.isEmpty { hasher.update(data: block) }
             let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
             guard digest == expectedSHA256 else { throw StorageError.wrongModel }
+            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUnlessOpen], ofItemAtPath: destination.path)
             return ModelRecord(filename: destination.lastPathComponent, displayName: source.lastPathComponent, bytes: size)
         } catch {
             // 只清理本次新建且失败的拷贝，不删除原模型或用户选择的源文件。
@@ -75,9 +75,10 @@ enum ModelStorage {
     }
 
     enum StorageError: LocalizedError {
-        case invalidFile, tooLarge, noSpace, budget, incomplete, wrongModel
+        case invalidFile, tooLarge, noSpace, budget, incomplete, wrongModel, unsupportedVersion
         var errorDescription: String? {
             switch self {
+            case .unsupportedVersion: return "模型格式版本不受当前推理运行库支持；模型文件未安装，请勿删除原文件"
             case .wrongModel: return "请选择完整的官方Qwen2.5-3B-Instruct Q4_K_M模型，大小约2.10GB；校验不符不会导入"
             case .invalidFile: return "请选择有效的GGUF v2/v3模型文件；格式检查不等于模型兼容性验证"
             case .tooLarge: return "初期只接受3GB以内模型，优先测试1～2GB量化模型"
